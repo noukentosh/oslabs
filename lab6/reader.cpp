@@ -1,46 +1,85 @@
 #include <iostream>
 #include <fstream>
-#include <pthread.h>
+#include <thread>
 #include <semaphore.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/socket.h>
+#include <signal.h>
 
-#define SHAREDSEM "/labsem"
-#define CHAROUT "2"
+#define WRITERSEM "/labsem.writter"
+#define READERSEM "/labsem.reader"
+
+bool exitFlag;
+sem_t *writerSem;
+sem_t *readerSem;
+int shmid;
+int *sharedMem;
+
+void exitAction () {
+  shmdt(sharedMem);
+  shmctl(shmid, IPC_RMID, NULL);
+  sem_close(writerSem);
+  sem_close(readerSem);
+  sem_unlink(WRITERSEM);
+  sem_unlink(READERSEM);
+  std::cout << "программа завершила работу" << std::endl;
+  exit(0);
+}
+
+void SIGINT_handler (int sig) {
+  if(sig == 2) exitAction();
+}
 
 int main (int argc, char *argv[]) {
+  if (signal(SIGINT, SIGINT_handler) == SIG_ERR) {
+    printf("SIGINT install error\n");
+    exit(1);
+  }
+
   std::cout << "программа начала работу" << std::endl;
 
   fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
 
-  sem_t *sem = sem_open(SHAREDSEM, O_CREAT, 0777, 10);
-  std::ofstream outputFile("output.txt", std::ios::app);
-  bool exitFlag = false;
+  exitFlag = false;
+  writerSem = sem_open(WRITERSEM, O_CREAT, 0777, 0);
+  readerSem = sem_open(READERSEM, O_CREAT, 0777, 1);
+  key_t sharedMemKey = ftok("./keylock", 1);
+  shmid = shmget(sharedMemKey, sizeof(int), IPC_CREAT | 0777);
+  if (shmid < 0) {
+		perror("shmget");
+	}
 
-  if (outputFile.is_open()) {
-    std::cout << "Файл успешно открыт" << std::endl;
-    std::cout << "Программа ждет нажатия клавиши" << std::endl;
-    while (!exitFlag) {
-      sem_wait(sem);
-      
-      for(int i = 0; i < 5; i++) {
-        std::cout << CHAROUT;
-        outputFile << CHAROUT;
-        sleep(1);
-      }
+  sharedMem = (int *)shmat(shmid, NULL, 0);
+  if (sharedMem == (void *)-1) {
+    perror("shmat");
+  }
+  int localVar;
 
-      if (getchar() != -1) {
-        exitFlag = true;
-      }
+  while(!exitFlag) {
+    sem_wait(writerSem);
 
-      sem_post(sem);
-      sleep(1);
+    localVar = *sharedMem;
+    std::cout << "Результат работы функции: " << localVar << std::endl;
+
+    sem_post(readerSem);
+
+    if (getchar() != -1) {
+      exitFlag = true;
     }
+
+    sleep(1);
   }
 
-  outputFile.close();
-  sem_close(sem);
-  sem_unlink(SHAREDSEM);
+  shmdt(sharedMem);
+  shmctl(shmid, IPC_RMID, NULL);
+  sem_close(writerSem);
+  sem_close(readerSem);
+  sem_unlink(WRITERSEM);
+  sem_unlink(READERSEM);
 
   std::cout << "программа завершила работу" << std::endl;
 }

@@ -9,4 +9,4 @@ g++ -o writer writer.o -pthread
 g++ -o reader reader.o -pthread
 
 #RUN
-./writer
+#./writer
