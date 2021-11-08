@@ -6,16 +6,47 @@
 #include <unistd.h>
 #include <thread>
 #include <fcntl.h>
+#include <queue>
 
 #define PORT 8888
 
 struct sockaddr_in si_server, si_client;
 socklen_t slen, recv_len;
 
-void workSocket (bool &exitFlag, int &sock) {
-  int buf;
+struct clientRequest {
+	struct sockaddr_in client;
+	socklen_t slen;
+};
+
+std::queue<clientRequest> clientRequests;
+
+void writeSocket (bool &exitFlag, int &sock) {
 	int message;
 	socklen_t messageLength;
+
+	while (!exitFlag) {
+		if(clientRequests.empty()) {
+			sleep(1);
+			continue;
+		}
+
+		struct clientRequest req = clientRequests.front();
+
+		getsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &message, &messageLength);
+
+		if (sendto(sock, &message, messageLength, 0, (struct sockaddr *) &req.client, req.slen) == -1) {
+			perror("sendto");
+			exit(1);
+		}
+
+		printf("Сервер отправил данные\n");
+
+		clientRequests.pop();
+	}
+}
+
+void readSocket (bool &exitFlag, int &sock) {
+  int buf;
 	bool noError = true;
   
   while (!exitFlag) {
@@ -31,14 +62,7 @@ void workSocket (bool &exitFlag, int &sock) {
 
 		printf("Клиент запросил данные\n");
 
-		getsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &message, &messageLength);
-
-		if (sendto(sock, &message, messageLength, 0, (struct sockaddr *) &si_client, slen) == -1) {
-			perror("sendto");
-	    exit(1);
-		}
-
-		printf("Сервер отправил данные\n");
+		clientRequests.push({ si_client, slen });
   }
 }
 
@@ -70,7 +94,8 @@ int main(void) {
 	  exit(1);
 	}
 	
-	std::thread processSocket (workSocket, std::ref(exitFlag), std::ref(sock));
+	std::thread readSocketThread (readSocket, std::ref(exitFlag), std::ref(sock));
+	std::thread writeSocketThread (writeSocket, std::ref(exitFlag), std::ref(sock));
 
   printf("программа ждет нажатия клавиши\n");
   getchar();
@@ -78,7 +103,8 @@ int main(void) {
 
   exitFlag = true;
 
-  processSocket.join();
+  readSocketThread.join();
+	writeSocketThread.join();
 
 	close(sock);
 }
